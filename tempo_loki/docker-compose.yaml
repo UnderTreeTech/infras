@@ -1,0 +1,58 @@
+version: "3"
+services:
+
+  tempo:
+    image: grafana/tempo:latest
+    command: [ "-search.enabled=true", "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./tempo-local.yaml:/etc/tempo.yaml
+      - ./tempo-data/:/tmp/tempo
+    ports:
+      - "3200"   # tempo
+      - "14250:14250" # jaeger agent report port
+    depends_on:
+      - minio
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      - MINIO_ACCESS_KEY=tempo
+      - MINIO_SECRET_KEY=supersecret
+    ports:
+      - "9001:9001"
+    entrypoint:
+      - sh
+      - -euc
+      - mkdir -p /data/tempo && mkdir -p /data/loki && /usr/bin/minio server /data --console-address ':9001'
+
+  tempo-query:
+    image: grafana/tempo-query:latest
+    command: [ "--grpc-storage-plugin.configuration-file=/etc/tempo-query.yaml" ]
+    volumes:
+      - ./tempo-query.yaml:/etc/tempo-query.yaml
+    ports:
+      - "16686:16686"  # jaeger-ui
+    depends_on:
+      - tempo
+
+  loki:
+    image: grafana/loki:2.3.0
+    command: [ "-config.file=/etc/loki/local-config.yaml"] # ,"-log.level=debug"
+    ports:
+      - "3100:3100"                                   # loki needs to be exposed so it receives logs
+    volumes:
+      - ./loki.yaml:/etc/loki/local-config.yaml
+      - ./loki:/data/loki
+    depends_on:
+      - minio
+
+  grafana:
+    image: grafana/grafana:8.0.3
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    ports:
+      - "3000:3000"

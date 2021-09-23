@@ -2,31 +2,36 @@ version: "3"
 services:
 
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:main-f57d781
     command: [ "-search.enabled=true", "-config.file=/etc/tempo.yaml" ]
     volumes:
       - ./tempo-local.yaml:/etc/tempo.yaml
-      - ./tempo-data/:/tmp/tempo
+      - ./data/tempo:/tmp/tempo
     ports:
       - "3200"   # tempo
       - "14250:14250" # jaeger agent report port
     depends_on:
       - minio
+    restart: always
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2021-08-20T18-32-01Z
     environment:
-      - MINIO_ACCESS_KEY=tempo
-      - MINIO_SECRET_KEY=supersecret
+      - MINIO_ROOT_USER=tempo
+      - MINIO_ROOT_PASSWORD=supersecret
+      - TZ=Asia/Shanghai
     ports:
       - "9001:9001"
+    volumes:
+      - ./data/minio:/data
     entrypoint:
       - sh
       - -euc
-      - mkdir -p /data/tempo && mkdir -p /data/loki && /usr/bin/minio server /data --console-address ':9001'
+      - mkdir -p /data/tempo && mkdir -p /data/loki && minio server /data --console-address ':9001'
+    restart: always
 
   tempo-query:
-    image: grafana/tempo-query:latest
+    image: grafana/tempo-query:main-f57d781
     command: [ "--grpc-storage-plugin.configuration-file=/etc/tempo-query.yaml" ]
     volumes:
       - ./tempo-query.yaml:/etc/tempo-query.yaml
@@ -34,17 +39,19 @@ services:
       - "16686:16686"  # jaeger-ui
     depends_on:
       - tempo
+    restart: always
 
-  loki:
-    image: grafana/loki:2.3.0
-    command: [ "-config.file=/etc/loki/local-config.yaml"] # ,"-log.level=debug"
-    ports:
-      - "3100:3100"                                   # loki needs to be exposed so it receives logs
-    volumes:
-      - ./loki.yaml:/etc/loki/local-config.yaml
-      - ./loki:/data/loki
-    depends_on:
-      - minio
+#  loki:
+#    image: grafana/loki:2.3.0
+#    command: [ "-config.file=/etc/loki/local-config.yaml"] # ,"-log.level=debug"
+#    ports:
+#      - "3100:3100"                                   # loki needs to be exposed so it receives logs
+#    volumes:
+#      - ./loki.yaml:/etc/loki/local-config.yaml
+#      - ./loki:/data/loki
+#    depends_on:
+#      - minio
+#    restart: always
 
   grafana:
     image: grafana/grafana:8.0.3
@@ -56,3 +63,42 @@ services:
       - GF_AUTH_DISABLE_LOGIN_FORM=true
     ports:
       - "3000:3000"
+    restart: always
+
+  elasticsearch:
+    image: elasticsearch:7.10.1
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - TZ= Asia/Shanghai
+      - "ES_JAVA_OPTS=-Xms16g -Xmx16g"
+    ulimits:
+      nproc: 65535
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./data/es:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+
+  kibana:
+      image: kibana:7.10.1
+      restart: unless-stopped
+      environment:
+        - elasticsearch.hosts= http://elasticsearch:9200
+        - TZ= Asia/Shanghai
+      ports:
+        - 5601:5601
+      depends_on:
+        - elasticsearch
+
+  redis:
+      # Docker Hub image
+      image: redis:6.2.5
+      restart: unless-stopped
+      volumes:
+        - ./data/redis:/data
+      ports:
+        - 6379:6379
